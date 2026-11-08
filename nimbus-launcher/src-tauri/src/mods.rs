@@ -13,7 +13,8 @@ fn mods_dir(id: &str) -> PathBuf {
     game_dir(id).join("mods")
 }
 fn index_path(id: &str) -> PathBuf {
-    instance_dir(id).join("mods-index.json")
+    // lives inside the mods folder, so instances sharing that folder also share what is known about it
+    mods_dir(id).join(".nimbus-index.json")
 }
 fn load_index(id: &str) -> HashMap<String, String> {
     read_json(&index_path(id)).unwrap_or_default()

@@ -8,6 +8,7 @@ mod mc;
 mod mods;
 mod packs;
 mod servers;
+mod shared;
 mod skins;
 mod util;
 
@@ -124,6 +125,9 @@ pub fn run() {
             instances::instance_save,
             instances::instance_delete,
             instances::instance_retarget,
+            shared::shared_set,
+            shared::shared_reset,
+            shared::shared_open,
             instances::import_mrpack,
             packs::import_pack,
             packs::modpack_install,

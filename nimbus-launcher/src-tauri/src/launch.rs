@@ -390,6 +390,9 @@ async fn launch_core(
     if sess.user_type == "legacy" {
         let _ = skins::sync_offline_skin(inst, account_id, &sess.username).await;
     }
+    if let Err(e) = crate::shared::apply(inst, st) {
+        let _ = app.emit("notice", format!("Shared folders unavailable: {e:#}"));
+    }
     let args = build_args(&v, inst, &sess)?;
     let gdir = game_dir(&inst.id);
     std::fs::create_dir_all(&gdir)?;

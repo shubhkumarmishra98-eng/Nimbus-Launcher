@@ -30,6 +30,18 @@ No bundled Chromium, no Node build step — the UI is plain HTML/CSS/JS served s
 - **Game tuning:** G1GC flags tuned for Minecraft, sensible memory defaults (half your RAM, capped), optional Sodium/Lithium/FerriteCore pack.
 - **Light on the UI thread:** game log lines are sent in batches, console is capped, progress events are throttled.
 
+## Shared mods and resource packs
+
+All instances read mods and resource packs from two common folders (default: `NimbusLauncher/common/mods` and `.../common/resourcepacks`
+in your Roaming data folder), so you add something once and every instance sees it. Under the hood each instance's `mods` and
+`resourcepacks` folder is a link (a junction on Windows — no admin rights needed) to the common folder.
+
+- **Settings → Shared folders:** change either folder, or reset it to the default. A custom folder's path is not displayed;
+  the default folder has a folder button that opens it.
+- **Per instance:** the Settings tab has "Use the shared mods and resource packs folders". Switch it off and the instance gets its own
+  copy. Imported modpacks start with sharing off so they keep their own mod set.
+- **Heads-up:** mods are tied to a Minecraft version and loader, so instances on different versions/loaders usually shouldn't share mods.
+
 ## Everything is point-and-click
 
 First run asks you to **sign in with Microsoft or pick a local username**, then offers a one-click "Create & play". Resource packs, shaders,

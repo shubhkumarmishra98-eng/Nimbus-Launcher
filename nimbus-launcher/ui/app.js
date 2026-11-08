@@ -42,18 +42,33 @@ function findingsHtml(list) {
   return list.map(f => `<div class="finding"><b>${esc(f.title)}</b><div>${esc(f.advice)}</div></div>`).join('');
 }
 
+/* ---------------- visual helpers ---------------- */
+const svg = p => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${p}</svg>`;
+const ICON = {
+  library: svg('<path d="M4 7l8-4 8 4v10l-8 4-8-4z"/><path d="M4 7l8 4 8-4M12 11v10"/>'),
+  accounts: svg('<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>'),
+  skins: svg('<path d="M8 3L3 7l3 3 2-1v12h8V9l2 1 3-3-5-4c-1 2-5 2-6 0z"/>'),
+  settings: svg('<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9L7 7M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"/>')
+};
+function hueOf(str) { let h = 0; for (const c of String(str)) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+function cube(name, size = 44) {
+  const h = hueOf(name), f = l => `hsl(${h} 58% ${l}%)`;
+  return `<svg class="cube" width="${size}" height="${size}" viewBox="0 0 48 48" aria-hidden="true"><polygon points="24,3 43,14 24,25 5,14" fill="${f(66)}"/><polygon points="5,14 24,25 24,45 5,34" fill="${f(47)}"/><polygon points="43,14 24,25 24,45 43,34" fill="${f(35)}"/></svg>`;
+}
+const metaOf = i => 'Minecraft ' + i.mc_version + (i.loader !== 'vanilla' ? ' with ' + cap(i.loader) : '');
+const barHtml = id => `<div class="bar" id="bar-${esc(id)}"><i></i><span></span></div><button class="btn sm cancel" data-act="cancel">Cancel</button>`;
+
 /* ---------------- shell ---------------- */
 function renderNav() {
-  const items = [['library', 'Library'], ['accounts', 'Accounts'], ['skins', 'Skins & capes'], ['settings', 'Settings']];
+  const items = [['library', 'Library'], ['accounts', 'Accounts'], ['skins', 'Skins'], ['settings', 'Settings']];
   $('#nav').innerHTML = items.map(([k, l]) =>
-    `<button class="nav-item ${S.page === k || (k === 'library' && S.page === 'instance') ? 'on' : ''}" data-act="nav" data-page="${k}">${l}</button>`).join('');
+    `<button class="nav-item ${S.page === k || (k === 'library' && S.page === 'instance') ? 'on' : ''}" data-act="nav" data-page="${k}">${ICON[k]}<span>${l}</span></button>`).join('');
 }
 function renderAccountBox() {
-  const a = S.accounts;
-  $('#account-box').innerHTML = a.length
-    ? `<div class="muted small" style="margin-bottom:6px">Playing as</div><select data-change="acc-select">${a.map(x =>
-      `<option value="${esc(x.id)}" ${x.selected ? 'selected' : ''}>${esc(x.username)} · ${x.kind === 'microsoft' ? 'Microsoft' : 'offline'}</option>`).join('')}</select>`
-    : `<button class="btn sm" style="width:100%" data-act="nav" data-page="accounts">Add an account</button>`;
+  const cur = curAcc();
+  $('#account-box').innerHTML = cur
+    ? `<button class="acct" data-act="acctmenu" title="Switch account"><span class="acct-av">${esc(cur.username[0].toUpperCase())}</span><span class="acct-name">${esc(cur.username)}</span></button>`
+    : `<button class="acct" data-act="nav" data-page="accounts"><span class="acct-av">+</span><span class="acct-name">Add account</span></button>`;
 }
 function render() {
   renderNav(); renderAccountBox();
@@ -66,24 +81,40 @@ function render() {
 function go(page) { S.page = page; render(); }
 
 /* ---------------- library ---------------- */
+function tileHtml(i) {
+  return `<div class="tile">${cube(i.name, 40)}
+    <div class="tile-main"><h3>${esc(i.name)}</h3><p>${esc(i.mc_version)}${i.loader !== 'vanilla' ? ' · ' + esc(cap(i.loader)) : ''}</p></div>
+    <div class="tile-actions"><button class="btn primary sm" data-act="play" data-id="${esc(i.id)}">Play</button>
+    <button class="btn sm" data-act="manage" data-id="${esc(i.id)}">Open</button></div>${barHtml(i.id)}</div>`;
+}
+function heroHtml(i) {
+  return `<section class="hero"><div class="hero-art">${cube(i.name, 150)}</div>
+    <div class="hero-body"><h1>${esc(i.name)}</h1><p class="hero-meta">${esc(metaOf(i))}</p>${barHtml(i.id)}
+    <div class="row"><button class="btn primary big" data-act="play" data-id="${esc(i.id)}">Play</button>
+    <button class="btn" data-act="manage" data-id="${esc(i.id)}">Mods &amp; settings</button></div></div></section>`;
+}
+function emptyHero() {
+  return `<section class="hero"><div class="hero-art">${cube('Nimbus', 150)}</div>
+    <div class="hero-body"><h1>Start your first world</h1>
+    <p class="hero-meta">We download the latest Minecraft and open it for you. The first start takes a few minutes; after that it’s quick.</p>
+    <div class="row"><button class="btn primary big" data-act="quickstart">Create &amp; play</button>
+    <button class="btn" data-act="new">Custom instance</button></div></div></section>`;
+}
 function libCards() {
-  const q = S.libQ.trim().toLowerCase();
-  const list = S.instances.filter(i => !q || (i.name + ' ' + i.mc_version + ' ' + i.loader).toLowerCase().includes(q));
-  return list.map(i => `
-    <div class="card">
-      <div class="card-top"><div class="avatar">${esc((i.name[0] || '?').toUpperCase())}</div>
-        <div><h3>${esc(i.name)}</h3><p class="muted">${esc(i.mc_version)} · ${esc(cap(i.loader))}${i.loader_version ? ' ' + esc(i.loader_version) : ''}</p></div></div>
-      <div class="bar" id="bar-${esc(i.id)}"><i></i><span></span></div><button class="btn sm cancel" data-act="cancel">Cancel</button>
-      <div class="row"><button class="btn primary" style="flex:1" data-act="play" data-id="${esc(i.id)}">Play</button>
-        <button class="btn" data-act="manage" data-id="${esc(i.id)}">Manage</button></div>
-    </div>`).join('') || '<p class="muted">No instances match.</p>';
+  const q = S.libQ.trim().toLowerCase(), all = S.instances;
+  if (q) {
+    const list = all.filter(i => (i.name + ' ' + i.mc_version + ' ' + i.loader).toLowerCase().includes(q));
+    return list.length ? `<div class="tiles">${list.map(tileHtml).join('')}</div>` : '<p class="muted">Nothing matches your search.</p>';
+  }
+  if (!all.length) return emptyHero();
+  return heroHtml(all[0]) + (all.length > 1 ? `<h2 class="section">Your instances</h2><div class="tiles">${all.slice(1).map(tileHtml).join('')}</div>` : '');
 }
 function pageLibrary() {
   return `<div class="head"><h1>Library</h1><div class="row">
-      <input id="lib-q" placeholder="Search instances…" value="${esc(S.libQ)}" data-input="lib-q" style="width:200px">
+      <input id="lib-q" placeholder="Search" value="${esc(S.libQ)}" data-input="lib-q" style="width:190px">
       <button class="btn" data-act="import">Import modpack</button>
-      <button class="btn primary" data-act="new">+ New instance</button></div></div>
-    <div class="grid" id="grid">${S.instances.length ? libCards() : '<p class="muted">No instances yet — create one, drop a .mrpack file here, or install a modpack from the Browse tab of any instance.</p>'}</div>`;
+      <button class="btn primary" data-act="new">New instance</button></div></div>
+    <div id="grid">${libCards()}</div>`;
 }
 function refreshPlay() {
   document.querySelectorAll('[data-act="play"]').forEach(b => {
@@ -178,11 +209,12 @@ function pageInstance() {
   const i = curInst();
   if (!i) { S.page = 'library'; return pageLibrary(); }
   const tabs = [['mods', 'Mods'], ['browse', 'Browse'], ['files', 'Files'], ['settings', 'Settings'], ['console', 'Console']];
-  return `<div class="head"><div class="row"><button class="btn sm" data-act="nav" data-page="library">← Back</button>
-      <div><h1>${esc(i.name)}</h1><div class="muted">${esc(i.mc_version)} · ${esc(cap(i.loader))}${i.loader_version ? ' ' + esc(i.loader_version) : ''}</div></div></div>
-      <button class="btn primary" data-act="play" data-id="${esc(i.id)}">Play</button></div>
-    <div class="bar" id="bar-${esc(i.id)}"><i></i><span></span></div><button class="btn sm cancel" data-act="cancel">Cancel</button>
-    <div class="tabs" style="margin-top:14px">${tabs.map(([k, l]) => `<button class="tab ${S.tab === k ? 'on' : ''}" data-act="tab" data-tab="${k}">${l}</button>`).join('')}</div>
+  return `<div class="head"><div class="row" style="gap:16px;flex-wrap:nowrap">
+      <button class="btn sm" data-act="nav" data-page="library">Back</button>${cube(i.name, 54)}
+      <div><h1>${esc(i.name)}</h1><div class="muted">${esc(metaOf(i))}${i.loader_version ? ' ' + esc(i.loader_version) : ''}</div></div></div>
+      <button class="btn primary big" data-act="play" data-id="${esc(i.id)}">Play</button></div>
+    ${barHtml(i.id)}
+    <div class="tabs" style="margin-top:18px">${tabs.map(([k, l]) => `<button class="tab ${S.tab === k ? 'on' : ''}" data-act="tab" data-tab="${k}">${l}</button>`).join('')}</div>
     <div id="tabbody"></div>`;
 }
 function renderTab() {
@@ -288,6 +320,7 @@ function instSettingsHtml(i) {
     <label class="f"><span>Launch wrapper command (e.g. gamemoderun) — optional</span><input id="is-wrap" value="${esc(i.wrapper || '')}"></label>
     <div class="kv"><label class="f"><span>Window width (0 = default)</span><input id="is-w" type="number" min="0" value="${i.width || 0}"></label>
     <label class="f"><span>Window height</span><input id="is-h" type="number" min="0" value="${i.height || 0}"></label></div>
+    <label class="chk"><input type="checkbox" id="is-shared" ${i.use_shared !== false ? 'checked' : ''}> Use the shared mods and resource packs folders</label>
     <label class="chk"><input type="checkbox" id="is-fs" ${i.fullscreen ? 'checked' : ''}> Start in fullscreen</label>
     <div class="row"><button class="btn primary" data-act="saveinst">Save</button>
       <button class="btn" data-act="preinstall">Download files now</button>
@@ -502,7 +535,21 @@ function pageSettings() {
     <label class="f"><span>Microsoft client ID — optional override (official builds embed one; see README)</span><input id="st-ms" value="${esc(s.ms_client_id || '')}" placeholder="00000000-0000-0000-0000-000000000000"></label>
     <label class="f"><span>CurseForge API key (optional, enables CurseForge browsing and pack import)</span><input id="st-cf" type="password" value="${esc(s.curseforge_key || '')}"></label>
     <label class="f"><span>Launcher update source — GitHub repo as owner/repo (optional)</span><input id="st-repo" value="${esc(s.update_repo || '')}" placeholder="yourname/nimbus-launcher"></label>
-    <div class="row"><button class="btn primary" data-act="savesettings">Save</button><button class="btn" data-act="checkself">Check for launcher update</button><button class="btn" data-act="opendata">Open data folder</button></div></div>`;
+    <div class="row"><button class="btn primary" data-act="savesettings">Save</button><button class="btn" data-act="checkself">Check for launcher update</button><button class="btn" data-act="opendata">Open data folder</button></div></div>${sharedPanel()}`;
+}
+const FOLDER_ICON = svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>');
+function sharedRow(kind, label) {
+  const custom = kind === 'mods' ? S.settings.mods_custom : S.settings.packs_custom;
+  return `<div class="item"><div class="grow"><b>${label}</b><p class="muted small">${custom ? 'Custom folder in use' : 'Default folder'}</p></div>
+    ${custom ? '' : `<button class="btn sm icon" data-act="sharedopen" data-kind="${kind}" title="Open folder" aria-label="Open the ${label.toLowerCase()} folder">${FOLDER_ICON}</button>`}
+    <button class="btn sm" data-act="sharedchange" data-kind="${kind}">Change…</button>
+    ${custom ? `<button class="btn sm" data-act="sharedreset" data-kind="${kind}">Reset to default</button>` : ''}</div>`;
+}
+function sharedPanel() {
+  return `<div class="panel" style="max-width:640px;margin-top:14px"><h2>Shared folders</h2>
+    <p class="muted small" style="margin-bottom:14px">Every instance reads mods and resource packs from these two folders, so something you add once shows up everywhere.
+    Mods only work with the Minecraft version and loader they were made for. If one instance should keep its own mods, switch sharing off in that instance’s Settings tab.</p>
+    <div class="list">${sharedRow('mods', 'Mods')}${sharedRow('packs', 'Resource packs')}</div></div>`;
 }
 async function checkSelfUpdate(silent) {
   const repo = (S.settings.update_repo || '').trim();
@@ -556,7 +603,7 @@ const ACT = {
     const i = curInst(); if (!i) return;
     const r = await call('instance_save', { instance: { ...i, name: $('#is-name').value, memory_mb: +$('#is-mem').value,
       java_path: $('#is-java').value, jvm_args: $('#is-jvm').value, server: $('#is-server').value, wrapper: $('#is-wrap').value,
-      fullscreen: $('#is-fs').checked, width: +$('#is-w').value || 0, height: +$('#is-h').value || 0 } });
+      fullscreen: $('#is-fs').checked, use_shared: $('#is-shared').checked, width: +$('#is-w').value || 0, height: +$('#is-h').value || 0 } });
     if (r) { Object.assign(i, r); toast('Saved'); render(); }
   },
   preinstall: () => instAction('instance_install', S.cur, 'Downloading files'),
@@ -634,8 +681,28 @@ const ACT = {
     if (p) toast('Backup saved: ' + p);
   },
   async offadd() {
-    const r = await call('account_add_offline', { username: $('#off-name').value }); if (r) { S.accounts = r; render(); }
+    const name = $('#off-name').value.trim();
+    let r = await call('account_add_offline', { username: name });
+    if (!r) return;
+    const added = [...r].reverse().find(a => a.kind === 'offline' && a.username === name);
+    if (added && !added.selected) r = (await call('account_select', { id: added.id })) || r;
+    S.accounts = r; render(); toast('Added ' + name + ' — now playing as ' + name);
   },
+  quickstart: showQuickStart,
+  acctmenu() {
+    const old = $('#acct-menu'); if (old) { old.remove(); return; }
+    const m = document.createElement('div'); m.id = 'acct-menu';
+    m.innerHTML = S.accounts.map(a => `<button class="mi" data-act="accsel" data-id="${esc(a.id)}"><span class="acct-av sm">${esc(a.username[0].toUpperCase())}</span>
+      <span>${esc(a.username)}<small>${a.kind === 'microsoft' ? 'Microsoft account' : 'Local account'}</small></span>${a.selected ? '<b>✓</b>' : ''}</button>`).join('')
+      + '<button class="mi plus" data-act="acctmanage">Add or manage accounts</button>';
+    document.body.appendChild(m);
+  },
+  async accsel(el) {
+    const m = $('#acct-menu'); if (m) m.remove();
+    const r = await call('account_select', { id: el.dataset.id });
+    if (r) { S.accounts = r; renderAccountBox(); if (S.page === 'accounts') render(); toast('Playing as ' + (r.find(a => a.selected) || {}).username); }
+  },
+  acctmanage() { const m = $('#acct-menu'); if (m) m.remove(); go('accounts'); },
   msadd: msLogin,
   openms: el => call('open_url', { url: el.dataset.url }),
   async selacc(el) { const r = await call('account_select', { id: el.dataset.id }); if (r) { S.accounts = r; render(); } },
@@ -656,6 +723,20 @@ const ACT = {
     if ((await call('settings_save', { settings: s })) !== undefined) { S.settings = s; applyTheme(); toast('Settings saved'); }
   },
   checkself: () => checkSelfUpdate(false),
+  sharedopen: el => call('shared_open', { kind: el.dataset.kind }),
+  async sharedchange(el) {
+    const p = await T.dialog.open({ directory: true, multiple: false });
+    if (typeof p !== 'string') return;
+    toast('Updating your instances…');
+    if ((await call('shared_set', { kind: el.dataset.kind, path: p })) !== undefined) {
+      S.settings = (await call('settings_get')) || S.settings; render(); toast('Folder changed');
+    }
+  },
+  async sharedreset(el) {
+    if ((await call('shared_reset', { kind: el.dataset.kind })) !== undefined) {
+      S.settings = (await call('settings_get')) || S.settings; render(); toast('Back to the default folder');
+    }
+  },
   mscancel() { invoke('ms_login_cancel').catch(() => { }); closeModal(); },
   welcomems() { closeModal(); msLogin(); },
   async welcomeoff() {
@@ -721,6 +802,7 @@ const INP = {
   'lib-q': el => { S.libQ = el.value; const g = $('#grid'); if (g) g.innerHTML = libCards(); refreshPlay(); for (const p of Object.values(S.prog)) onProgress(p); }
 };
 document.addEventListener('click', e => {
+  if (!e.target.closest('#acct-menu') && !e.target.closest('[data-act="acctmenu"]')) { const m = $('#acct-menu'); if (m) m.remove(); }
   const el = e.target.closest('[data-act]'); if (!el) return;
   const fn = ACT[el.dataset.act]; if (fn) fn(el, e);
 });

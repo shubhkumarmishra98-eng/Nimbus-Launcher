@@ -18,6 +18,12 @@ pub struct Settings {
     pub java_path: String,
     pub theme: String,
     pub update_repo: String,
+    /// custom shared folders (empty = default); never sent to the UI
+    pub mods_dir: String,
+    pub packs_dir: String,
+    /// computed for the UI: is a custom folder in use?
+    pub mods_custom: bool,
+    pub packs_custom: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -30,6 +36,10 @@ impl Default for Settings {
             java_path: String::new(),
             theme: "dark".to_string(),
             update_repo: String::new(),
+            mods_dir: String::new(),
+            packs_dir: String::new(),
+            mods_custom: false,
+            packs_custom: false,
         }
     }
 }
@@ -38,13 +48,24 @@ pub fn load_settings() -> Settings {
 }
 #[tauri::command]
 pub fn settings_get() -> Settings {
-    load_settings()
+    // the custom folder paths stay on the Rust side; the UI only learns whether one is set
+    let mut s = load_settings();
+    s.mods_custom = !s.mods_dir.trim().is_empty();
+    s.packs_custom = !s.packs_dir.trim().is_empty();
+    s.mods_dir.clear();
+    s.packs_dir.clear();
+    s
 }
 #[tauri::command]
 pub fn settings_save(settings: Settings) -> Result<(), String> {
     let mut s = settings;
     s.concurrency = s.concurrency.clamp(4, 64);
     s.default_memory_mb = s.default_memory_mb.max(512);
+    let cur = load_settings();
+    s.mods_dir = cur.mods_dir;
+    s.packs_dir = cur.packs_dir;
+    s.mods_custom = false;
+    s.packs_custom = false;
     write_json(&root().join("settings.json"), &s).map_err(es)
 }
 
@@ -83,6 +104,12 @@ pub struct Instance {
     pub fullscreen: bool,
     #[serde(default)]
     pub wrapper: String,
+    #[serde(default = "yes")]
+    pub use_shared: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 pub fn valid_id(id: &str) -> bool {
@@ -132,6 +159,10 @@ pub struct NewInstance {
 }
 
 pub fn create(spec: NewInstance) -> Result<Instance> {
+    create_with(spec, true)
+}
+
+pub fn create_with(spec: NewInstance, shared: bool) -> Result<Instance> {
     let name = spec.name.trim().to_string();
     if name.is_empty() {
         return Err(anyhow!("Please enter a name"));
@@ -162,9 +193,11 @@ pub fn create(spec: NewInstance) -> Result<Instance> {
         server: String::new(),
         fullscreen: false,
         wrapper: String::new(),
+        use_shared: shared,
     };
     std::fs::create_dir_all(game_dir(&inst.id).join("mods"))?;
     save_instance(&inst)?;
+    let _ = crate::shared::apply(&inst, &load_settings());
     Ok(inst)
 }
 
@@ -188,7 +221,9 @@ pub fn instance_save(instance: Instance) -> Result<Instance, String> {
     cur.server = instance.server.trim().to_string();
     cur.fullscreen = instance.fullscreen;
     cur.wrapper = instance.wrapper.trim().to_string();
+    cur.use_shared = instance.use_shared;
     save_instance(&cur).map_err(es)?;
+    crate::shared::apply(&cur, &load_settings()).map_err(es)?;
     Ok(cur)
 }
 
@@ -200,6 +235,7 @@ pub fn instance_delete(id: String) -> Result<(), String> {
     if crate::launch::is_running(&id) {
         return Err("Stop the game before deleting this instance".into());
     }
+    crate::shared::detach_all(&id);
     std::fs::remove_dir_all(instance_dir(&id)).map_err(|e| e.to_string())
 }
 
@@ -246,14 +282,14 @@ pub async fn import_inner(app: AppHandle, path: String) -> Result<Instance> {
     };
     let name = idx["name"].as_str().unwrap_or("Imported modpack").to_string();
     let st = load_settings();
-    let inst = create(NewInstance {
+    let inst = create_with(NewInstance {
         name,
         mc_version: mc,
         loader: loader.to_string(),
         loader_version: lv.to_string(),
         memory_mb: st.default_memory_mb,
         perf_pack: false,
-    })?;
+    }, false)?;
     let gdir = game_dir(&inst.id);
 
     let mut jobs = vec![];

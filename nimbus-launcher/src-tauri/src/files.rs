@@ -43,7 +43,7 @@ fn dir_size(p: &Path) -> u64 {
     t
 }
 
-fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
+pub fn copy_dir_all(src: &Path, dst: &Path) -> Result<()> {
     std::fs::create_dir_all(dst)?;
     for e in std::fs::read_dir(src)? {
         let e = e?;
@@ -191,7 +191,7 @@ fn add_dir(
         if skip_top.contains(&top) {
             continue;
         }
-        let ty = e.file_type()?;
+        let ty = std::fs::metadata(&p)?.file_type();
         if ty.is_dir() {
             add_dir(zw, base, &p, opts.clone(), prefix, skip_top)?;
         } else if ty.is_file() {
@@ -243,6 +243,7 @@ pub async fn instance_duplicate(id: String) -> Result<Instance, String> {
         inst.last_played = 0;
         copy_dir_all(&instance_dir(&src.id), &instance_dir(&inst.id))?;
         save_instance(&inst)?;
+        let _ = crate::shared::apply(&inst, &crate::instances::load_settings());
         Ok(inst)
     })
     .await

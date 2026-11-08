@@ -75,14 +75,14 @@ async fn import_curseforge(app: AppHandle, path: String) -> Result<Instance> {
     };
     let key = mods::cf_key()?;
     let st = load_settings();
-    let inst = instances::create(NewInstance {
+    let inst = instances::create_with(NewInstance {
         name: man["name"].as_str().unwrap_or("CurseForge pack").to_string(),
         mc_version: mc,
         loader,
         loader_version: lv,
         memory_mb: st.default_memory_mb.max(4096),
         perf_pack: false,
-    })?;
+    }, false)?;
     let gdir = game_dir(&inst.id);
     progress(&app, &inst.id, "Resolving modpack files", 0, 0);
 
