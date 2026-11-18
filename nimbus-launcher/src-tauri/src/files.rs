@@ -6,7 +6,14 @@ use serde_json::json;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const KINDS: [&str; 4] = ["resourcepacks", "shaderpacks", "saves", "screenshots"];
+const KINDS: [&str; 6] = [
+    "resourcepacks",
+    "shaderpacks",
+    "saves",
+    "screenshots",
+    "logs",
+    "crash-reports",
+];
 
 fn kind_dir(id: &str, kind: &str) -> Result<PathBuf> {
     if !valid_id(id) {
@@ -261,7 +268,7 @@ pub async fn instance_export(id: String, path: String) -> Result<(), String> {
         let mut deps = serde_json::Map::new();
         deps.insert("minecraft".into(), json!(inst.mc_version));
         let key = match inst.loader.as_str() {
-            "fabric" => Some("fabric-loader"),
+            "fabric" | "hacker" => Some("fabric-loader"),
             "quilt" => Some("quilt-loader"),
             "forge" => Some("forge"),
             "neoforge" => Some("neoforge"),
@@ -292,16 +299,21 @@ pub async fn instance_export(id: String, path: String) -> Result<(), String> {
 
 // ---------------- resource pack selection (options.txt) ----------------
 fn mc_minor(v: &str) -> u32 {
-    v.split('.')
-        .nth(1)
-        .and_then(|p| {
-            p.chars()
+    let num = |p: Option<&str>| -> Option<u32> {
+        p.and_then(|s| {
+            s.chars()
                 .take_while(|c| c.is_ascii_digit())
                 .collect::<String>()
                 .parse()
                 .ok()
         })
-        .unwrap_or(99)
+    };
+    let mut it = v.split('.');
+    let major = num(it.next()).unwrap_or(1);
+    if major >= 2 {
+        return 99; // year-based versions (26.x and later) are newer than every 1.x
+    }
+    num(it.next()).unwrap_or(99)
 }
 
 fn options_path(id: &str) -> PathBuf {
@@ -378,6 +390,65 @@ pub fn pack_toggle(instance_id: String, name: String, enabled: bool) -> Result<(
             list.push(entry);
         }
         write_enabled(&inst.id, &list)
+    };
+    run().map_err(es)
+}
+
+// ---------------- quick graphics presets (options.txt) ----------------
+fn set_options(id: &str, pairs: &[(&str, String)]) -> Result<()> {
+    let path = options_path(id);
+    let txt = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> = txt.lines().map(String::from).collect();
+    for (k, v) in pairs {
+        let prefix = format!("{k}:");
+        let new = format!("{k}:{v}");
+        match lines.iter_mut().find(|l| l.starts_with(&prefix)) {
+            Some(l) => *l = new,
+            None => lines.push(new),
+        }
+    }
+    if let Some(d) = path.parent() {
+        std::fs::create_dir_all(d)?;
+    }
+    std::fs::write(&path, lines.join("\n") + "\n")?;
+    Ok(())
+}
+
+/// Applies a video-settings preset: "performance", "balanced" or "cool" (frame cap + VSync for hot laptops).
+#[tauri::command]
+pub fn options_preset(instance_id: String, preset: String) -> Result<(), String> {
+    let run = || -> Result<()> {
+        let inst = load_instance(&instance_id)?;
+        if crate::launch::is_running(&inst.id) {
+            return Err(anyhow!(
+                "Close the game first — Minecraft rewrites its settings when it exits"
+            ));
+        }
+        let minor = mc_minor(&inst.mc_version);
+        // (render distance, simulation distance, particles, entity scaling, fast graphics, blend, max fps, vsync)
+        let (rd, sd, particles, entity, fast, blend, fps, vsync) = match preset.as_str() {
+            "performance" => (8, 6, 2, "0.75", true, 1, 260, false),
+            "balanced" => (12, 8, 1, "1.0", false, 2, 144, false),
+            "cool" => (10, 8, 1, "0.75", true, 1, 60, true),
+            _ => return Err(anyhow!("unknown preset")),
+        };
+        let mut p: Vec<(&str, String)> = vec![
+            ("renderDistance", rd.to_string()),
+            ("particles", particles.to_string()),
+            ("entityDistanceScaling", entity.to_string()),
+            ("biomeBlendRadius", blend.to_string()),
+            ("maxFps", fps.to_string()),
+            ("enableVsync", vsync.to_string()),
+        ];
+        if minor >= 18 {
+            p.push(("simulationDistance", sd.to_string()));
+        }
+        if minor >= 16 {
+            p.push(("graphicsMode", (if fast { "0" } else { "1" }).to_string()));
+        } else {
+            p.push(("fancyGraphics", (!fast).to_string()));
+        }
+        set_options(&inst.id, &p)
     };
     run().map_err(es)
 }

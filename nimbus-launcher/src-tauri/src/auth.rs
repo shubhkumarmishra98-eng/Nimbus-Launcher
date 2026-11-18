@@ -115,6 +115,12 @@ pub fn account_add_offline(username: String) -> Result<Vec<AccountView>, String>
         return Err("Username must be 3–16 characters: letters, numbers or underscore".into());
     }
     let mut s = load();
+    if s.accounts
+        .iter()
+        .any(|a| a.kind == "offline" && a.username.eq_ignore_ascii_case(&name))
+    {
+        return Err("You already have a local account with that name".into());
+    }
     let id = format!("off-{}", &uuid::Uuid::new_v4().simple().to_string()[..10]);
     s.accounts.push(Account {
         id: id.clone(),

@@ -128,6 +128,18 @@ pub fn analyze_instance(id: &str) -> Vec<Finding> {
     analyze_text(&collect(id))
 }
 
+/// The end of the instance's latest.log, so the Console can show the previous session after a restart.
+#[tauri::command]
+pub fn log_tail(instance_id: String) -> Result<String, String> {
+    if !valid_id(&instance_id) {
+        return Err("invalid instance".into());
+    }
+    Ok(tail_file(
+        &game_dir(&instance_id).join("logs").join("latest.log"),
+        200_000,
+    ))
+}
+
 #[tauri::command]
 pub fn crash_analyze(instance_id: String) -> Result<Vec<Finding>, String> {
     if !valid_id(&instance_id) {

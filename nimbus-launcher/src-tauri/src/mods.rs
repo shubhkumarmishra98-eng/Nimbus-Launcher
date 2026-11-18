@@ -25,6 +25,7 @@ fn save_index(id: &str, i: &HashMap<String, String>) {
 fn loaders_for(l: &str) -> Vec<String> {
     match l {
         "quilt" => vec!["quilt".to_string(), "fabric".to_string()],
+        "hacker" => vec!["fabric".to_string()],
         o => vec![o.to_string()],
     }
 }
@@ -236,7 +237,7 @@ async fn search_modrinth(
 fn cf_loader_type(l: &str) -> &'static str {
     match l {
         "forge" => "1",
-        "fabric" => "4",
+        "fabric" | "hacker" => "4",
         "quilt" => "5",
         "neoforge" => "6",
         _ => "0",

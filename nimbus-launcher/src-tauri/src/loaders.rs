@@ -21,8 +21,8 @@ fn mc_parts(v: &str) -> Vec<u32> {
 
 pub async fn versions_for(loader: &str, mcv: &str) -> Result<Vec<String>> {
     match loader {
-        "fabric" | "quilt" => {
-            let url = if loader == "fabric" {
+        "fabric" | "quilt" | "hacker" => {
+            let url = if loader == "fabric" || loader == "hacker" {
                 format!("https://meta.fabricmc.net/v2/versions/loader/{mcv}")
             } else {
                 format!("https://meta.quiltmc.org/v3/versions/loader/{mcv}")
@@ -130,7 +130,7 @@ pub async fn ensure_loader(app: &AppHandle, inst: &mut Instance) -> Result<Strin
     let mcv = inst.mc_version.clone();
     let task = inst.id.clone();
     match inst.loader.as_str() {
-        "fabric" => {
+        "fabric" | "hacker" => {
             let id = format!("fabric-loader-{lv}-{mcv}");
             if version_exists(&id) {
                 return Ok(id);
@@ -151,7 +151,9 @@ pub async fn ensure_loader(app: &AppHandle, inst: &mut Instance) -> Result<Strin
             .await
         }
         "forge" => {
-            if mc_parts(&mcv).get(1).copied().unwrap_or(0) < 13 {
+            if mc_parts(&mcv).first().copied().unwrap_or(1) < 2
+                && mc_parts(&mcv).get(1).copied().unwrap_or(0) < 13
+            {
                 return install_legacy_forge(app, &task, &mcv, &lv).await;
             }
             let mut id = format!("{mcv}-forge-{lv}");

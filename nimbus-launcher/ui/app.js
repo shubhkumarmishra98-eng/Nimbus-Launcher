@@ -3,10 +3,17 @@ const T = window.__TAURI__;
 const invoke = T.core.invoke, listen = T.event.listen;
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const cap = s => s ? s[0].toUpperCase() + s.slice(1) : s;
+const cap = s => s === 'hacker' ? 'Hacker Fabric' : (s ? s[0].toUpperCase() + s.slice(1) : s);
 const fmtN = n => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? (n / 1e3).toFixed(1) + 'k' : String(n);
 const fmtSize = b => b > 1073741824 ? (b / 1073741824).toFixed(1) + ' GB' : b > 1048576 ? (b / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(b / 1024)) + ' KB';
-const LOADERS = ['vanilla', 'fabric', 'quilt', 'forge', 'neoforge'];
+const LOADERS = ['vanilla', 'fabric', 'quilt', 'forge', 'neoforge', 'hacker'];
+const HACKER_NOTICE = 'Hacker Fabric installs LiquidBounce, a “hacked client” (cheat utility mod).\n\nIt is meant for singleplayer and servers that allow it. On most public servers it gets accounts banned, and it can break other players’ fun.\n\nContinue?';
+function hackerOk() {
+  try { if (localStorage.getItem('hacker-ack')) return true; } catch (e) { }
+  if (!confirm(HACKER_NOTICE)) return false;
+  try { localStorage.setItem('hacker-ack', '1'); } catch (e) { }
+  return true;
+}
 const KINDS = [['mod', 'Mods'], ['resourcepack', 'Resource packs'], ['shader', 'Shaders'], ['modpack', 'Modpacks']];
 const FOLDERS = [['saves', 'Worlds'], ['resourcepacks', 'Resource packs'], ['shaderpacks', 'Shader packs'], ['screenshots', 'Screenshots']];
 
@@ -17,9 +24,21 @@ const S = {
   skinAcc: null
 };
 
+function friendly(m) {
+  const detail = m.length > 180 ? m.slice(0, 180) + '…' : m;
+  if (/error sending request|dns error|tcp connect|connection (refused|reset|closed)|timed out|network is unreachable/i.test(m))
+    return 'Couldn’t reach the internet. Check your connection (and any firewall or VPN) and try again.\n' + detail;
+  if (/os error 5\b|access is denied|permission denied/i.test(m))
+    return 'Windows blocked access to a file. Close anything using it (the game, a virus scan) and try again.\n' + detail;
+  if (/os error 112|no space left|not enough space/i.test(m))
+    return 'Your disk is full. Free up some space and try again.\n' + detail;
+  if (/checksum mismatch|damaged/i.test(m))
+    return 'A download arrived damaged. Try again — if it keeps happening, use Repair in the instance settings.\n' + detail;
+  return m;
+}
 async function call(cmd, args) {
   try { return await invoke(cmd, args || {}); }
-  catch (e) { toast(String(e), true); return undefined; }
+  catch (e) { toast(friendly(String(e)), true); return undefined; }
 }
 function toast(msg, err) {
   const t = document.createElement('div');
@@ -55,6 +74,29 @@ function cube(name, size = 44) {
   const h = hueOf(name), f = l => `hsl(${h} 58% ${l}%)`;
   return `<svg class="cube" width="${size}" height="${size}" viewBox="0 0 48 48" aria-hidden="true"><polygon points="24,3 43,14 24,25 5,14" fill="${f(66)}"/><polygon points="5,14 24,25 24,45 5,34" fill="${f(47)}"/><polygon points="43,14 24,25 24,45 43,34" fill="${f(35)}"/></svg>`;
 }
+function playedText(i) {
+  if (!i.last_played) return 'Not played yet';
+  const s = Math.max(0, Date.now() / 1000 - i.last_played);
+  if (s < 90) return 'Played just now';
+  if (s < 3600) return 'Played ' + Math.round(s / 60) + ' min ago';
+  if (s < 86400) return 'Played ' + Math.round(s / 3600) + ' h ago';
+  if (s < 7 * 86400) return 'Played ' + Math.round(s / 86400) + ' days ago';
+  return 'Played ' + Math.round(s / (7 * 86400)) + ' weeks ago';
+}
+function dismissedNews() { try { return new Set(JSON.parse(localStorage.getItem('news-dismissed') || '[]')); } catch (e) { return new Set(); } }
+function newsHtml() {
+  const d = dismissedNews(), n = (S.news || []).find(x => !d.has(x.id));
+  if (!n) return '';
+  return `<div class="news"><div class="ub-text"><b>${esc(n.title)}</b><span class="muted small">${esc(n.text)}</span></div>
+    <div class="row">${n.url ? `<button class="btn sm" data-act="newsopen" data-url="${esc(n.url)}">Read more</button>` : ''}<button class="btn sm" data-act="newsdismiss" data-id="${esc(n.id)}">Dismiss</button></div></div>`;
+}
+function ramHint(i) {
+  const el = $('#ram-hint'); if (!el) return;
+  const total = Math.max(2048, Math.min(S.sys.total_mb || 8192, 32768)), n = S.mods.length;
+  let rec = i.loader === 'vanilla' ? 3072 : n <= 40 ? 4096 : n <= 100 ? 6144 : 8192;
+  rec = Math.min(rec, Math.max(2048, Math.floor(total * 0.6 / 256) * 256));
+  el.innerHTML = `Recommended for this instance: <b>${rec} MB</b>${i.loader !== 'vanilla' ? ' (' + n + ' mods)' : ''} <button class="btn sm" data-act="useram" data-mb="${rec}">Use</button>`;
+}
 const metaOf = i => 'Minecraft ' + i.mc_version + (i.loader !== 'vanilla' ? ' with ' + cap(i.loader) : '');
 const barHtml = id => `<div class="bar" id="bar-${esc(id)}"><i></i><span></span></div><button class="btn sm cancel" data-act="cancel">Cancel</button>`;
 
@@ -77,19 +119,20 @@ function render() {
   if (S.page === 'library' || S.page === 'instance') { refreshPlay(); for (const p of Object.values(S.prog)) onProgress(p); }
   if (S.page === 'instance') renderTab();
   if (S.page === 'skins') loadSkins();
+  showUpdateBanner();
 }
 function go(page) { S.page = page; render(); }
 
 /* ---------------- library ---------------- */
 function tileHtml(i) {
   return `<div class="tile">${cube(i.name, 40)}
-    <div class="tile-main"><h3>${esc(i.name)}</h3><p>${esc(i.mc_version)}${i.loader !== 'vanilla' ? ' · ' + esc(cap(i.loader)) : ''}</p></div>
+    <div class="tile-main"><h3>${esc(i.name)}</h3><p>${esc(i.mc_version)}${i.loader !== 'vanilla' ? ' · ' + esc(cap(i.loader)) : ''} · ${esc(playedText(i))}</p></div>
     <div class="tile-actions"><button class="btn primary sm" data-act="play" data-id="${esc(i.id)}">Play</button>
     <button class="btn sm" data-act="manage" data-id="${esc(i.id)}">Open</button></div>${barHtml(i.id)}</div>`;
 }
 function heroHtml(i) {
   return `<section class="hero"><div class="hero-art">${cube(i.name, 150)}</div>
-    <div class="hero-body"><h1>${esc(i.name)}</h1><p class="hero-meta">${esc(metaOf(i))}</p>${barHtml(i.id)}
+    <div class="hero-body"><h1>${esc(i.name)}</h1><p class="hero-meta">${esc(metaOf(i))} · ${esc(playedText(i))}</p>${barHtml(i.id)}
     <div class="row"><button class="btn primary big" data-act="play" data-id="${esc(i.id)}">Play</button>
     <button class="btn" data-act="manage" data-id="${esc(i.id)}">Mods &amp; settings</button></div></div></section>`;
 }
@@ -114,6 +157,7 @@ function pageLibrary() {
       <input id="lib-q" placeholder="Search" value="${esc(S.libQ)}" data-input="lib-q" style="width:190px">
       <button class="btn" data-act="import">Import modpack</button>
       <button class="btn primary" data-act="new">New instance</button></div></div>
+    <div id="news-slot">${newsHtml()}</div>
     <div id="grid">${libCards()}</div>`;
 }
 function refreshPlay() {
@@ -194,6 +238,7 @@ async function loadLoaderVersions(p = 'n', selLv) {
   const loaderEl = $('#' + p + '-loader'); if (!loaderEl) return;
   const loader = loaderEl.value, mc = $('#' + p + '-ver').value;
   const perf = $('#' + p + '-perf-row'); if (perf) perf.style.display = loader === 'vanilla' ? 'none' : 'flex';
+  if (loader === 'hacker') { const pf = $('#' + p + '-perf'); if (pf) pf.checked = false; }
   const lv = $('#' + p + '-lv');
   if (loader === 'vanilla') { lv.innerHTML = '<option value="">—</option>'; lv.disabled = true; return; }
   lv.disabled = false; lv.innerHTML = '<option value="">Loading…</option>';
@@ -224,11 +269,22 @@ function renderTab() {
   if (S.tab === 'mods') el.innerHTML = modsHtml(i);
   else if (S.tab === 'browse') el.innerHTML = browseHtml(i);
   else if (S.tab === 'files') el.innerHTML = filesHtml();
-  else if (S.tab === 'settings') { el.innerHTML = instSettingsHtml(i); initRetarget(i); }
+  else if (S.tab === 'settings') { el.innerHTML = instSettingsHtml(i); initRetarget(i); ramHint(i); }
   else if (S.tab === 'console') {
     el.innerHTML = `<div class="row" style="margin-bottom:8px"><button class="btn sm" data-act="clearlog">Clear</button>
-      <button class="btn sm" data-act="analyze">Analyze last run</button><button class="btn sm" data-act="sharelog">Share log (mclo.gs)</button></div><div class="console" id="console"></div>`;
-    const c = $('#console'); (S.logs[i.id] || []).forEach(l => c.appendChild(logLine(l))); c.scrollTop = c.scrollHeight;
+      <button class="btn sm" data-act="analyze">Analyze last run</button><button class="btn sm" data-act="sharelog">Share log (mclo.gs)</button>
+      <button class="btn sm" data-act="openlogs" data-kind="logs">Logs folder</button><button class="btn sm" data-act="openlogs" data-kind="crash-reports">Crash reports</button></div><div class="console" id="console"></div>`;
+    const c = $('#console'), live = S.logs[i.id] || [];
+    live.forEach(l => c.appendChild(logLine(l))); c.scrollTop = c.scrollHeight;
+    if (!live.length) {
+      invoke('log_tail', { instanceId: i.id }).then(t => {
+        const cc = $('#console');
+        if (!t || !cc || S.cur !== i.id || S.tab !== 'console' || (S.logs[i.id] || []).length) return;
+        cc.appendChild(logLine('— last saved log from the previous session —'));
+        t.split(/\r?\n/).slice(-1500).forEach(l => cc.appendChild(logLine(l)));
+        cc.scrollTop = cc.scrollHeight;
+      }).catch(() => { });
+    }
   }
 }
 async function loadMods() {
@@ -314,6 +370,7 @@ function instSettingsHtml(i) {
   return `<div class="panel" style="max-width:600px">
     <label class="f"><span>Name</span><input id="is-name" value="${esc(i.name)}"></label>
     <label class="f"><span>Memory: <b id="is-memv">${i.memory_mb}</b> MB</span><input type="range" id="is-mem" min="1024" max="${total}" step="256" value="${i.memory_mb}" data-input="is-mem"></label>
+    <p class="muted small" id="ram-hint" style="margin:-6px 0 14px"></p>
     <label class="f"><span>Java executable (leave empty to use the managed runtime)</span><input id="is-java" value="${esc(i.java_path)}"></label>
     <label class="f"><span>Extra JVM arguments</span><input id="is-jvm" value="${esc(i.jvm_args)}"></label>
     <label class="f"><span>Join server on launch (host or host:port)</span><input id="is-server" value="${esc(i.server || '')}" placeholder="play.example.net"></label>
@@ -329,6 +386,12 @@ function instSettingsHtml(i) {
       <button class="btn" data-act="exportinst">Export (.mrpack)</button>
       <button class="btn" data-act="openinst">Open folder</button>
       <button class="btn danger" data-act="delinst">Delete instance</button></div></div>
+  <div class="panel" style="max-width:600px;margin-top:14px"><h2>Quick video settings</h2>
+    <p class="muted small" style="margin-bottom:12px">One click sets render distance, particles, frame limit and more. Close the game first; you can still fine-tune everything in Minecraft afterwards.</p>
+    <div class="row"><button class="btn" data-act="preset" data-preset="performance">Max FPS</button>
+    <button class="btn" data-act="preset" data-preset="balanced">Balanced</button>
+    <button class="btn" data-act="preset" data-preset="cool">Cool &amp; quiet</button></div>
+    <p class="muted small" style="margin-top:10px">Cool &amp; quiet caps the frame rate at 60 with VSync, which keeps laptops cooler and fans calmer.</p></div>
   <div class="panel" style="max-width:600px;margin-top:14px"><h2>Minecraft version &amp; loader</h2>
     <p class="muted small">Switching keeps your worlds and settings, but mods built for the old version may stop working.</p>
     <label class="chk"><input type="checkbox" id="r-snap" data-change="r-snap"> Show snapshots</label>
@@ -532,10 +595,12 @@ function pageSettings() {
     <label class="f"><span>Parallel downloads</span><input type="number" id="st-conc" min="4" max="64" value="${s.concurrency || 24}"></label>
     <label class="f"><span>Global Java executable (optional)</span><input id="st-java" value="${esc(s.java_path || '')}"></label>
     <label class="chk"><input type="checkbox" id="st-snap" ${s.show_snapshots ? 'checked' : ''}> Show snapshots by default</label>
+    ${S.sys.os === 'windows' ? `<label class="chk"><input type="checkbox" id="st-gpu" ${s.gpu_high_perf !== false ? 'checked' : ''}> Use the high-performance graphics card (laptops with two graphics chips)</label>` : ''}
     <label class="f"><span>Microsoft client ID — optional override (official builds embed one; see README)</span><input id="st-ms" value="${esc(s.ms_client_id || '')}" placeholder="00000000-0000-0000-0000-000000000000"></label>
     <label class="f"><span>CurseForge API key (optional, enables CurseForge browsing and pack import)</span><input id="st-cf" type="password" value="${esc(s.curseforge_key || '')}"></label>
-    <label class="f"><span>Launcher update source — GitHub repo as owner/repo (optional)</span><input id="st-repo" value="${esc(s.update_repo || '')}" placeholder="yourname/nimbus-launcher"></label>
-    <div class="row"><button class="btn primary" data-act="savesettings">Save</button><button class="btn" data-act="checkself">Check for launcher update</button><button class="btn" data-act="opendata">Open data folder</button></div></div>${sharedPanel()}`;
+    <label class="f"><span>LiquidBounce download link — only for Hacker Fabric instances, optional (a direct https link to the .jar)</span><input id="st-lb" value="${esc(s.lb_url || '')}" placeholder="https://…/liquidbounce.jar"></label>
+    <p class="muted small" style="margin-bottom:14px">Nimbus Launcher version ${esc(S.version || '')}</p>
+    <div class="row"><button class="btn primary" data-act="savesettings">Save</button><button class="btn" data-act="checkself">Check for updates</button><button class="btn" data-act="opendata">Open data folder</button></div></div>${sharedPanel()}`;
 }
 const FOLDER_ICON = svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>');
 function sharedRow(kind, label) {
@@ -547,16 +612,29 @@ function sharedRow(kind, label) {
 }
 function sharedPanel() {
   return `<div class="panel" style="max-width:640px;margin-top:14px"><h2>Shared folders</h2>
-    <p class="muted small" style="margin-bottom:14px">Every instance reads mods and resource packs from these two folders, so something you add once shows up everywhere.
-    Mods only work with the Minecraft version and loader they were made for. If one instance should keep its own mods, switch sharing off in that instance’s Settings tab.</p>
+    <p class="muted small" style="margin-bottom:12px">Every instance reads mods and resource packs from these two folders, so something you add once shows up in each instance that can use it.
+    Switch sharing off for a single instance in its Settings tab if it should keep its own.</p>
+    <label class="chk"><input type="checkbox" data-change="grp" ${S.settings.group_mods !== false ? 'checked' : ''}> Keep mods for different Minecraft versions and loaders apart (recommended)</label>
     <div class="list">${sharedRow('mods', 'Mods')}${sharedRow('packs', 'Resource packs')}</div></div>`;
 }
 async function checkSelfUpdate(silent) {
-  const repo = (S.settings.update_repo || '').trim();
-  if (!repo) { if (!silent) toast('Set the update source (owner/repo) first', true); return; }
-  const r = await call('launcher_update_check', { repo });
-  if (r) { toast(`Version ${r.version} is available — opening the release page`); call('open_url', { url: r.url }); }
-  else if (r === null && !silent) toast('You’re on the latest version');
+  const r = silent ? await invoke('update_check').catch(() => undefined) : await call('update_check');
+  if (r) { S.update = r; S.updateDismissed = false; showUpdateBanner(); if (!silent) toast('Version ' + r.version + ' is available'); }
+  else if (r === null && !silent) toast('You’re on the latest version (v' + S.version + ')');
+}
+function bannerHtml() {
+  const u = S.update, win = S.sys.os === 'windows';
+  const mb = u.size ? ' · ' + (u.size / 1048576).toFixed(1) + ' MB' : '';
+  return `<div id="update-banner"><div class="ub-text"><b>Update available — version ${esc(u.version)}${mb}</b>
+      ${u.notes ? `<span class="muted small">${esc(u.notes)}</span>` : ''}
+      <div class="bar${S.updating ? ' on' : ''}" id="upd-bar"><i></i><span></span></div></div>
+    <div class="row"><button class="btn primary sm" data-act="${win ? 'doupdate' : 'openupdate'}" ${S.updating ? 'disabled' : ''}>${win ? (S.updating ? 'Updating…' : 'Update now') : 'Open download page'}</button>
+    <button class="btn sm" data-act="dismissupdate" ${S.updating ? 'disabled' : ''}>Later</button></div></div>`;
+}
+function showUpdateBanner() {
+  const old = $('#update-banner'); if (old) old.remove();
+  if (!S.update || S.updateDismissed) return;
+  $('#main').insertAdjacentHTML('afterbegin', bannerHtml());
 }
 
 /* ---------------- actions ---------------- */
@@ -577,10 +655,11 @@ const ACT = {
   async create() {
     const name = $('#n-name').value.trim(); if (!name) return toast('Please enter a name', true);
     const loader = $('#n-loader').value;
+    if (loader === 'hacker' && !hackerOk()) return;
     const r = await call('instance_create', { spec: {
       name, mc_version: $('#n-ver').value, loader, loader_version: $('#n-lv').value || '',
       memory_mb: +$('#n-mem').value, perf_pack: loader !== 'vanilla' && $('#n-perf').checked } });
-    if (r) { closeModal(); await reloadInstances(); render(); toast('Instance created — press Play to download everything'); }
+    if (r) { closeModal(); await reloadInstances(); render(); toast('Instance created — downloading in the background so Play is quick'); invoke('instance_install', { id: r.id }).catch(() => { }); }
   },
   async import() {
     const p = await pickFile('Modpack (.mrpack / CurseForge .zip)', ['mrpack', 'zip']); if (!p) return;
@@ -719,10 +798,29 @@ const ACT = {
   async savesettings() {
     const s = { ms_client_id: $('#st-ms').value.trim(), curseforge_key: $('#st-cf').value.trim(), default_memory_mb: +$('#st-mem').value,
       concurrency: +$('#st-conc').value || 24, show_snapshots: $('#st-snap').checked, java_path: $('#st-java').value.trim(),
-      theme: $('#st-theme').value, update_repo: $('#st-repo').value.trim() };
+      theme: $('#st-theme').value, lb_url: $('#st-lb').value.trim(), gpu_high_perf: $('#st-gpu') ? $('#st-gpu').checked : S.settings.gpu_high_perf !== false };
     if ((await call('settings_save', { settings: s })) !== undefined) { S.settings = s; applyTheme(); toast('Settings saved'); }
   },
   checkself: () => checkSelfUpdate(false),
+  newsopen: el => call('open_url', { url: el.dataset.url }),
+  newsdismiss(el) {
+    const d = dismissedNews(); d.add(el.dataset.id);
+    try { localStorage.setItem('news-dismissed', JSON.stringify([...d])); } catch (e) { }
+    const slot = $('#news-slot'); if (slot) slot.innerHTML = newsHtml();
+  },
+  async openlogs(el) { const d = await call('folder_path', { instanceId: S.cur, kind: el.dataset.kind }); if (d) call('open_path', { path: d }); },
+  useram(el) { $('#is-mem').value = el.dataset.mb; $('#is-memv').textContent = el.dataset.mb; },
+  async preset(el) {
+    if ((await call('options_preset', { instanceId: S.cur, preset: el.dataset.preset })) !== undefined) toast('Video settings applied');
+  },
+  dismissupdate() { S.updateDismissed = true; showUpdateBanner(); },
+  openupdate() { if (S.update) call('open_url', { url: S.update.page }); },
+  async doupdate() {
+    if (S.running.size && !confirm('A game is running. Updating restarts the launcher (the game keeps running). Continue?')) return;
+    S.updating = true; showUpdateBanner();
+    const r = await call('update_install');
+    if (r === undefined) { S.updating = false; showUpdateBanner(); if (S.update && S.update.page) call('open_url', { url: S.update.page }); }
+  },
   sharedopen: el => call('shared_open', { kind: el.dataset.kind }),
   async sharedchange(el) {
     const p = await T.dialog.open({ directory: true, multiple: false });
@@ -767,6 +865,7 @@ const ACT = {
   async retarget() {
     const i = curInst(); if (!i) return;
     if (!confirm('Switch this instance to the selected version/loader? Mods made for the old version may stop working.')) return;
+    if ($('#r-loader').value === 'hacker' && !hackerOk()) return;
     const r = await call('instance_retarget', { id: i.id, mcVersion: $('#r-ver').value, loader: $('#r-loader').value, loaderVersion: $('#r-lv').value || '' });
     if (r) { Object.assign(i, r); toast('Switched — press Play to download the new version'); render(); }
   },
@@ -788,6 +887,10 @@ const ACT = {
 const CHG = {
   'acc-select': async el => { const r = await call('account_select', { id: el.value }); if (r) { S.accounts = r; } },
   'skin-acc': el => { S.skinAcc = el.value; loadSkins(); },
+  grp: async el => {
+    const s = { ...S.settings, group_mods: el.checked };
+    if ((await call('settings_save', { settings: s })) !== undefined) { S.settings = (await call('settings_get')) || s; toast(el.checked ? 'Mods are now kept apart by version and loader' : 'All instances now share one mods folder'); }
+  },
   'n-snap': () => loadVersionList('n'),
   'n-loader': () => loadLoaderVersions('n'),
   'n-ver': () => loadLoaderVersions('n'),
@@ -823,9 +926,17 @@ document.addEventListener('keydown', e => { const k = e.target.dataset && e.targ
   await listen('game-state', e => onState(e.payload));
   await listen('game-crash', e => onCrash(e.payload));
   await listen('notice', e => toast(String(e.payload)));
+  await listen('update-progress', e => {
+    const bar = $('#upd-bar'), p = e.payload; if (!bar || !p.total) return;
+    bar.classList.add('on'); bar.querySelector('i').style.width = (p.done / p.total * 100) + '%';
+    bar.querySelector('span').textContent = Math.round(p.done / p.total * 100) + '%';
+  });
+  S.version = await invoke('app_version').catch(() => '');
+  invoke('news_get').then(n => { S.news = n || []; const slot = $('#news-slot'); if (slot) slot.innerHTML = newsHtml(); }).catch(() => { });
   await listen('tauri://drag-drop', e => onDrop((e.payload && e.payload.paths) || []));
   S.msOk = await invoke('ms_available').catch(() => false);
   render();
   if (!S.accounts.length) showWelcome(); else if (!S.instances.length) showQuickStart();
   checkSelfUpdate(true);
+  setInterval(() => checkSelfUpdate(true), 6 * 3600 * 1000);
 })();

@@ -1,6 +1,8 @@
 mod auth;
 mod crash;
 mod files;
+mod gpu;
+mod hacker;
 mod instances;
 mod launch;
 mod loaders;
@@ -10,6 +12,7 @@ mod packs;
 mod servers;
 mod shared;
 mod skins;
+mod updater;
 mod util;
 
 use serde::Serialize;
@@ -61,52 +64,8 @@ fn open_path(path: String) -> Result<(), String> {
     r.map_err(util::es)
 }
 
-#[derive(Serialize)]
-struct LauncherUpdate {
-    version: String,
-    url: String,
-}
-
-/// Checks the latest GitHub release of `owner/repo` against this build's version.
-#[tauri::command]
-async fn launcher_update_check(repo: String) -> Result<Option<LauncherUpdate>, String> {
-    let run = async {
-        let ok = repo.matches('/').count() == 1
-            && repo
-                .chars()
-                .all(|c| c.is_ascii_alphanumeric() || "-_./".contains(c));
-        if !ok {
-            return Err(anyhow::anyhow!("Use the form owner/repo"));
-        }
-        let r: serde_json::Value =
-            util::get_json(&format!("https://api.github.com/repos/{repo}/releases/latest")).await?;
-        let tag = r["tag_name"]
-            .as_str()
-            .unwrap_or("")
-            .trim_start_matches('v')
-            .to_string();
-        let url = r["html_url"].as_str().unwrap_or("").to_string();
-        let parse = |s: &str| -> Vec<u64> {
-            s.split('.')
-                .map(|p| {
-                    p.chars()
-                        .take_while(|c| c.is_ascii_digit())
-                        .collect::<String>()
-                        .parse()
-                        .unwrap_or(0)
-                })
-                .collect()
-        };
-        if !tag.is_empty() && parse(&tag) > parse(env!("CARGO_PKG_VERSION")) {
-            Ok(Some(LauncherUpdate { version: tag, url }))
-        } else {
-            Ok(None)
-        }
-    };
-    run.await.map_err(util::es)
-}
-
 pub fn run() {
+    updater::cleanup_old();
     let _ = util::ensure_dirs();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -115,7 +74,10 @@ pub fn run() {
             data_dir,
             open_url,
             open_path,
-            launcher_update_check,
+            updater::app_version,
+            updater::news_get,
+            updater::update_check,
+            updater::update_install,
             mc::list_versions,
             loaders::loader_versions,
             instances::settings_get,
@@ -146,10 +108,12 @@ pub fn run() {
             files::folder_delete,
             files::packs_enabled,
             files::pack_toggle,
+            files::options_preset,
             files::world_backup,
             files::instance_duplicate,
             files::instance_export,
             crash::crash_analyze,
+            crash::log_tail,
             crash::log_share,
             auth::accounts_list,
             auth::account_add_offline,

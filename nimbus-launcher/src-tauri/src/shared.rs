@@ -40,6 +40,24 @@ pub fn active_dir(kind: &str, st: &Settings) -> PathBuf {
     default_dir(kind)
 }
 
+/// Mods only work with the Minecraft version and loader they were built for, so by default each
+/// (loader, version) pair gets its own subfolder inside the shared mods folder.
+pub fn group_key(inst: &Instance) -> String {
+    format!("{}-{}", inst.loader, inst.mc_version)
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' })
+        .collect()
+}
+
+fn target_for(inst: &Instance, kind: &str, st: &Settings) -> PathBuf {
+    let base = active_dir(kind, st);
+    if kind == "mods" && st.group_mods {
+        base.join(group_key(inst))
+    } else {
+        base
+    }
+}
+
 fn inst_path(id: &str, kind: &str) -> PathBuf {
     game_dir(id).join(folder_name(kind))
 }
@@ -134,7 +152,7 @@ fn migrate(dir: &Path, target: &Path) -> Result<()> {
 pub fn apply(inst: &Instance, st: &Settings) -> Result<()> {
     for kind in ["mods", "packs"] {
         let link = inst_path(&inst.id, kind);
-        let target = active_dir(kind, st);
+        let target = target_for(inst, kind, st);
         std::fs::create_dir_all(&target)?;
         if inst.use_shared {
             if is_link(&link) {
@@ -170,7 +188,7 @@ pub fn detach_all(id: &str) {
     }
 }
 
-fn relink_all(st: &Settings) -> Result<()> {
+pub fn relink_all(st: &Settings) -> Result<()> {
     let mut failed = 0;
     for inst in instances_list() {
         if crate::launch::is_running(&inst.id) {

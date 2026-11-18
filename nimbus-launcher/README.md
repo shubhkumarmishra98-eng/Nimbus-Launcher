@@ -30,6 +30,17 @@ No bundled Chromium, no Node build step — the UI is plain HTML/CSS/JS served s
 - **Game tuning:** G1GC flags tuned for Minecraft, sensible memory defaults (half your RAM, capped), optional Sodium/Lithium/FerriteCore pack.
 - **Light on the UI thread:** game log lines are sent in batches, console is capped, progress events are throttled.
 
+## Automatic updates (for you and your players)
+
+Push a change to the GitHub repo (the web "Upload files / Commit" button counts) and GitHub Actions builds a new `.exe` and publishes it as a
+**Release** with a checksum file. Every copy of the launcher checks for the newest release on start (and under *Settings → Check for updates*)
+and shows an **Update available** banner. On Windows, **Update now** downloads the new `.exe`, verifies its SHA-256, swaps it in place and
+restarts; elsewhere the button opens the download page. The version number is `1.0.<build number>`, so every commit is an update.
+
+- Tip: write a meaningful commit message — its first line is shown in the banner as the "what's new" text.
+- Only commits that touch `nimbus-launcher/` trigger a build; changing just the README does not.
+- Players on an older copy built before this feature need to download the new `.exe` once by hand.
+
 ## Shared mods and resource packs
 
 All instances read mods and resource packs from two common folders (default: `NimbusLauncher/common/mods` and `.../common/resourcepacks`
@@ -41,6 +52,26 @@ in your Roaming data folder), so you add something once and every instance sees 
 - **Per instance:** the Settings tab has "Use the shared mods and resource packs folders". Switch it off and the instance gets its own
   copy. Imported modpacks start with sharing off so they keep their own mod set.
 - **Heads-up:** mods are tied to a Minecraft version and loader, so instances on different versions/loaders usually shouldn't share mods.
+
+## Fewer crashes, better frame rates
+
+- **Mods stay with their version:** inside the shared mods folder each Minecraft version + loader gets its own subfolder, so a Fabric 1.21 mod never ends up in a Forge 1.20 instance. (Switch off under *Settings → Shared folders* for one flat folder.)
+- **High-performance GPU (Windows):** on laptops with two graphics chips, Java is set to use the faster one (current user only, reversible in Windows Settings → Graphics).
+- **Quick video settings:** Max FPS / Balanced / Cool & quiet presets per instance (render distance, particles, frame limit, VSync).
+
+## News for your players
+
+Put a `news.json` file at the **root of your GitHub repo** (see the example next to this project). Every launcher shows the newest item
+as a dismissible card on the Library page. Editing the file on GitHub is enough — no new build is needed.
+Format: `{"items":[{"id":"unique-id","title":"…","text":"…","url":"https://… (optional)"}]}`; change the `id` for a new announcement.
+
+## Hacker Fabric (LiquidBounce)
+
+Choose **Hacker Fabric** as the mod loader when creating an instance. Nimbus installs Fabric, the two libraries LiquidBounce needs
+(Fabric API and Fabric Language Kotlin, from Modrinth) and downloads the matching LiquidBounce jar from the project's GitHub releases (CCBlueX/LiquidBounce) — nothing is bundled.
+LiquidBounce is GPL-3.0 software by CCBlueX and is described by its authors as a "hacked client". Hacker Fabric instances keep their mods in their
+own subfolder so the client never ends up in normal instances. The launcher shows a one-time notice: use it in singleplayer or on servers that allow it.
+The newest releases target the newest Minecraft version, so pick a Minecraft version LiquidBounce supports (the version list on liquidbounce.net shows them). If the automatic lookup can't find a jar for your version, the error lists the jar files it saw; you can also paste a direct download link in *Settings → LiquidBounce download link*.
 
 ## Everything is point-and-click
 

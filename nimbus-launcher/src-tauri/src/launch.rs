@@ -6,6 +6,7 @@ use serde::Serialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::Instant;
 use std::sync::{Mutex, OnceLock};
 use tauri::{AppHandle, Emitter};
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -79,6 +80,38 @@ fn ready_stamp_ok(inst: &Instance) -> bool {
             .unwrap_or(false)
 }
 
+static PREPARE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn try_fast(
+    app: &AppHandle,
+    inst: &Instance,
+    st: &Settings,
+    task: &str,
+) -> Option<(mc::VersionJson, PathBuf)> {
+    if is_verify() || !ready_stamp_ok(inst) {
+        return None;
+    }
+    let v = mc::load_version(&inst.resolved_id).ok()?;
+    let jp = if inst.java_path.trim().is_empty() {
+        st.java_path.clone()
+    } else {
+        inst.java_path.clone()
+    };
+    let java = mc::ensure_java(app, &v, task, &jp).await.ok()?;
+    Some((v, java))
+}
+
+/// A line in the instance's console, so players can see where launch time goes.
+fn note(app: &AppHandle, id: &str, msg: &str) {
+    let _ = app.emit(
+        "game-log",
+        LogEvt {
+            id: id.to_string(),
+            lines: vec![format!("[Nimbus] {msg}")],
+        },
+    );
+}
+
 async fn prepare(
     app: &AppHandle,
     inst: &mut Instance,
@@ -90,17 +123,17 @@ async fn prepare(
 
     // Fast path: everything was fully downloaded/verified on an earlier run, so skip all
     // library/asset checks (thousands of files) and go straight to launching.
-    if !is_verify() && ready_stamp_ok(inst) {
-        if let Ok(v) = mc::load_version(&inst.resolved_id) {
-            let jp = if inst.java_path.trim().is_empty() {
-                st.java_path.clone()
-            } else {
-                inst.java_path.clone()
-            };
-            if let Ok(java) = mc::ensure_java(app, &v, &task, &jp).await {
-                return Ok((v, java));
-            }
-        }
+    if let Some(r) = try_fast(app, inst, st, &task).await {
+        return Ok(r);
+    }
+    // Only one download/verify job at a time (instances share libraries and assets).
+    let _lock = PREPARE_LOCK.lock().await;
+    // Another task may have finished this instance while we waited (e.g. the background download).
+    if let Ok(fresh) = load_instance(&inst.id) {
+        *inst = fresh;
+    }
+    if let Some(r) = try_fast(app, inst, st, &task).await {
+        return Ok(r);
     }
     progress(app, &task, "Preparing", 0, 0);
     mc::ensure_vanilla(&inst.mc_version).await?;
@@ -122,6 +155,10 @@ async fn prepare(
         if inst.perf_pack && inst.loader != "vanilla" {
             progress(app, &task, "Installing performance mods", 0, 0);
             let _ = mods::install_perf_pack(inst).await;
+        }
+        if inst.loader == "hacker" {
+            progress(app, &task, "Installing LiquidBounce", 0, 0);
+            crate::hacker::install(inst).await?;
         }
         inst.installed = true;
     }
@@ -181,6 +218,7 @@ fn build_args(
     v: &mc::VersionJson,
     inst: &Instance,
     sess: &auth::Session,
+    managed_java: bool,
 ) -> Result<Vec<String>> {
     let plan = mc::lib_plan(v)?;
     let sep = if cfg!(windows) { ";" } else { ":" };
@@ -251,7 +289,7 @@ fn build_args(
     let mem = inst.memory_mb.max(512);
     let mut jvm: Vec<String> = vec![
         format!("-Xmx{mem}M"),
-        format!("-Xms{}M", mem.min(512)),
+        format!("-Xms{}M", mem.min(2048)),
         "-XX:+UseG1GC".into(),
         "-XX:+ParallelRefProcEnabled".into(),
         "-XX:MaxGCPauseMillis=200".into(),
@@ -272,6 +310,21 @@ fn build_args(
         "-Dlog4j2.formatMsgNoLookups=true".into(),
         "-Dfile.encoding=UTF-8".into(),
     ];
+    // Java 19+ can keep a class-data archive between runs, which trims JVM start-up time.
+    // Only used with the launcher-managed Java, whose version we know for sure.
+    let java_major = v.java_version.as_ref().map(|j| j.major).unwrap_or(8);
+    if managed_java && java_major >= 19 {
+        let mut pre: Vec<String> = vec![
+            "-XX:+IgnoreUnrecognizedVMOptions".into(),
+            "-XX:+AutoCreateSharedArchive".into(),
+            format!(
+                "-XX:SharedArchiveFile={}",
+                instance_dir(&inst.id).join("game.jsa").display()
+            ),
+        ];
+        pre.extend(jvm);
+        jvm = pre;
+    }
     jvm.extend(inst.jvm_args.split_whitespace().map(String::from));
     let version_jvm = v
         .arguments
@@ -333,7 +386,7 @@ fn build_args(
 }
 
 // ---------------- launch ----------------
-fn spawn_reader<R>(app: AppHandle, id: String, r: R)
+fn spawn_reader<R>(app: AppHandle, id: String, r: R, started: Instant)
 where
     R: tokio::io::AsyncRead + Unpin + Send + 'static,
 {
@@ -342,6 +395,7 @@ where
         let mut rd = BufReader::new(r);
         let mut buf: Vec<u8> = Vec::new();
         let mut batch: Vec<String> = Vec::new();
+        let mut opened = false;
         let flush = |batch: &mut Vec<String>| {
             if !batch.is_empty() {
                 let _ = app.emit(
@@ -362,7 +416,24 @@ where
             match res {
                 Ok(Ok(0)) | Ok(Err(_)) => break,
                 Ok(Ok(_)) => {
-                    batch.push(String::from_utf8_lossy(&buf).trim_end().to_string());
+                    let line = String::from_utf8_lossy(&buf).trim_end().to_string();
+                    if !opened
+                        && (line.contains("Backend library")
+                            || line.contains("OpenAL initialized")
+                            || line.contains("Narrator library"))
+                    {
+                        opened = true;
+                        note(
+                            &app,
+                            &id,
+                            &format!(
+                                "Game window opened {:.1} s after Java started",
+                                started.elapsed().as_secs_f32()
+                            ),
+                        );
+                        progress(&app, &id, "Ready", 1, 1);
+                    }
+                    batch.push(line);
                     buf.clear();
                     if batch.len() >= 200 {
                         flush(&mut batch);
@@ -385,15 +456,31 @@ async fn launch_core(
     account_id: &str,
 ) -> Result<()> {
     // token refresh (network) and file preparation run at the same time
+    let t0 = Instant::now();
+    let fast = !is_verify() && ready_stamp_ok(inst);
     let (sess, (v, java)) =
         tokio::try_join!(auth::fresh_session(account_id), prepare(app, inst, st))?;
+    note(
+        app,
+        &inst.id,
+        &format!(
+            "Game files {} and sign-in finished in {:.1} s",
+            if fast { "were already verified" } else { "were checked/downloaded" },
+            t0.elapsed().as_secs_f32()
+        ),
+    );
+    let managed = inst.java_path.trim().is_empty() && st.java_path.trim().is_empty();
     if sess.user_type == "legacy" {
         let _ = skins::sync_offline_skin(inst, account_id, &sess.username).await;
+    }
+    if st.gpu_high_perf {
+        let j = java.clone();
+        let _ = tokio::task::spawn_blocking(move || crate::gpu::prefer_high_performance(&j)).await;
     }
     if let Err(e) = crate::shared::apply(inst, st) {
         let _ = app.emit("notice", format!("Shared folders unavailable: {e:#}"));
     }
-    let args = build_args(&v, inst, &sess)?;
+    let args = build_args(&v, inst, &sess, managed)?;
     let gdir = game_dir(&inst.id);
     std::fs::create_dir_all(&gdir)?;
 
@@ -417,6 +504,7 @@ async fn launch_core(
     let mut child = cmd
         .spawn()
         .map_err(|e| anyhow!("Failed to start Java ({}): {e}", java.display()))?;
+    let started = Instant::now();
 
     let id = inst.id.clone();
     let (tx, rx) = oneshot::channel::<()>();
@@ -425,13 +513,22 @@ async fn launch_core(
     save_instance(inst)?;
 
     if let Some(out) = child.stdout.take() {
-        spawn_reader(app.clone(), id.clone(), out);
+        spawn_reader(app.clone(), id.clone(), out, started);
     }
     if let Some(err) = child.stderr.take() {
-        spawn_reader(app.clone(), id.clone(), err);
+        spawn_reader(app.clone(), id.clone(), err, started);
     }
     emit_state(app, &id, "running", None);
-    progress(app, &id, "Running", 1, 1);
+    progress(app, &id, "Starting Minecraft", 0, 0);
+    note(app, &id, "Java started — waiting for the game window…");
+    {
+        // safety net: never leave the progress bar up forever
+        let (a3, i3) = (app.clone(), id.clone());
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(120)).await;
+            progress(&a3, &i3, "Ready", 1, 1);
+        });
+    }
 
     let app2 = app.clone();
     tokio::spawn(async move {

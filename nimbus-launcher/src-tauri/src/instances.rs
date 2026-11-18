@@ -24,6 +24,12 @@ pub struct Settings {
     /// computed for the UI: is a custom folder in use?
     pub mods_custom: bool,
     pub packs_custom: bool,
+    /// keep shared mods of different Minecraft versions / loaders in separate subfolders
+    pub group_mods: bool,
+    /// Windows: run Java on the high-performance GPU (hybrid-graphics laptops)
+    pub gpu_high_perf: bool,
+    /// optional direct link to the LiquidBounce jar for "Hacker Fabric" instances
+    pub lb_url: String,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -40,6 +46,9 @@ impl Default for Settings {
             packs_dir: String::new(),
             mods_custom: false,
             packs_custom: false,
+            group_mods: true,
+            gpu_high_perf: true,
+            lb_url: String::new(),
         }
     }
 }
@@ -66,7 +75,12 @@ pub fn settings_save(settings: Settings) -> Result<(), String> {
     s.packs_dir = cur.packs_dir;
     s.mods_custom = false;
     s.packs_custom = false;
-    write_json(&root().join("settings.json"), &s).map_err(es)
+    let regroup = cur.group_mods != s.group_mods;
+    write_json(&root().join("settings.json"), &s).map_err(es)?;
+    if regroup {
+        let _ = crate::shared::relink_all(&s);
+    }
+    Ok(())
 }
 
 // ---------------- instances ----------------
@@ -170,7 +184,7 @@ pub fn create_with(spec: NewInstance, shared: bool) -> Result<Instance> {
     if spec.mc_version.trim().is_empty() {
         return Err(anyhow!("Please choose a Minecraft version"));
     }
-    if !["vanilla", "fabric", "quilt", "forge", "neoforge"].contains(&spec.loader.as_str()) {
+    if !["vanilla", "fabric", "quilt", "forge", "neoforge", "hacker"].contains(&spec.loader.as_str()) {
         return Err(anyhow!("Unknown mod loader"));
     }
     let id = uuid::Uuid::new_v4().simple().to_string()[..12].to_string();
@@ -361,7 +375,7 @@ pub fn instance_retarget(
     if crate::launch::is_running(&id) {
         return Err("Stop the game first".into());
     }
-    if !["vanilla", "fabric", "quilt", "forge", "neoforge"].contains(&loader.as_str()) {
+    if !["vanilla", "fabric", "quilt", "forge", "neoforge", "hacker"].contains(&loader.as_str()) {
         return Err("Unknown mod loader".into());
     }
     if mc_version.trim().is_empty() {
@@ -374,5 +388,6 @@ pub fn instance_retarget(
     i.resolved_id = String::new();
     let _ = std::fs::remove_dir_all(instance_dir(&id).join("natives"));
     save_instance(&i).map_err(es)?;
+    let _ = crate::shared::apply(&i, &load_settings());
     Ok(i)
 }
