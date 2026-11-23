@@ -9,6 +9,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check the project files are in the right place
+        shell: pwsh
+        run: |
+          foreach ($f in 'src-tauri/src/updater.rs','src-tauri/src/migrate.rs','ui/index.html','src-tauri/Cargo.toml') {
+            if (-not (Test-Path $f)) { Write-Error "Missing nimbus-launcher/$f - the files were uploaded to the wrong folder"; exit 1 }
+          }
+          Get-ChildItem src-tauri/src -Name
       - uses: dtolnay/rust-toolchain@stable
       - uses: swatinem/rust-cache@v2
         with:
